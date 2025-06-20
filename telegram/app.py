@@ -43,9 +43,17 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Telegram bot...")
     
-    # Run Telegram bot in a separate thread
-    bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)
-    bot_thread.start()
+    # Check if we should use webhook or polling
+    use_webhook = os.getenv('USE_WEBHOOK', 'false').lower() == 'true'
+    
+    if use_webhook:
+        logger.info("Using webhook mode for Telegram bot")
+        await setup_webhook()
+    else:
+        logger.info("Using polling mode for Telegram bot")
+        # Run Telegram bot in a separate thread with retry mechanism
+        bot_thread = threading.Thread(target=run_telegram_bot_with_retry, daemon=True)
+        bot_thread.start()
     
     logger.info("FastAPI + Telegram Bot started successfully!")
     
@@ -458,32 +466,88 @@ def setup_telegram_bot():
         
     telegram_app.add_error_handler(error_handler)
 
-def run_telegram_bot():
-    """Run the Telegram bot"""
+def run_telegram_bot_with_retry():
+    """Run the Telegram bot with retry mechanism"""
+    import time
+    
+    max_retries = 3
+    retry_delay = 30
+    
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Bot startup attempt {attempt + 1}/{max_retries}")
+            
+            # Wait between attempts
+            if attempt > 0:
+                logger.info(f"Waiting {retry_delay} seconds before retry...")
+                time.sleep(retry_delay)
+            
+            setup_telegram_bot()
+            # Create new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Clear webhooks and start polling
+            async def start_bot():
+                await telegram_app.bot.delete_webhook(drop_pending_updates=True)
+                logger.info("Cleared existing webhooks")
+                await asyncio.sleep(3)  # Wait for cleanup
+                
+                me = await telegram_app.bot.get_me()
+                logger.info(f"Bot connected: @{me.username}")
+            
+            loop.run_until_complete(start_bot())
+            
+            logger.info("Starting Telegram bot polling...")
+            telegram_app.run_polling(
+                stop_signals=None,
+                drop_pending_updates=True,
+                allowed_updates=["message", "callback_query"]
+            )
+            
+            # If we get here, polling started successfully
+            break
+            
+        except Exception as e:
+            logger.error(f"Bot startup attempt {attempt + 1} failed: {e}")
+            
+            if attempt == max_retries - 1:
+                logger.error("All bot startup attempts failed. Bot will not be available.")
+                break
+            
+            if "Conflict" in str(e):
+                logger.info("Conflict detected - will retry with longer delay")
+                retry_delay = 60  # Longer delay for conflicts
+
+async def setup_webhook():
+    """Setup webhook mode for production"""
     try:
         setup_telegram_bot()
-        # Create new event loop for this thread
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        logger.info("Starting Telegram bot polling...")
         
-        # Clear any existing webhooks to prevent conflicts
-        async def clear_webhook():
-            await telegram_app.bot.delete_webhook(drop_pending_updates=True)
-            logger.info("Cleared existing webhooks")
+        # Get the render URL
+        render_url = os.getenv('RENDER_EXTERNAL_URL', 'https://icta-dataanalyst.onrender.com')
+        webhook_url = f"{render_url}/webhook"
         
-        loop.run_until_complete(clear_webhook())
+        await telegram_app.bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+        logger.info(f"Webhook set to: {webhook_url}")
         
-        # Disable signal handling since we're not in the main thread
-        telegram_app.run_polling(
-            stop_signals=None,
-            drop_pending_updates=True,  # Clear pending updates
-            allowed_updates=["message", "callback_query"]  # Only handle specific updates
-        )
     except Exception as e:
-        logger.error(f"Error running Telegram bot: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
+        logger.error(f"Failed to setup webhook: {e}")
+        # Fallback to polling
+        logger.info("Falling back to polling mode")
+        threading.Thread(target=run_telegram_bot_with_retry, daemon=True).start()
+
+# Webhook endpoint
+@app.post("/webhook")
+async def webhook_handler(request: dict):
+    """Handle incoming webhook requests"""
+    try:
+        update = Update.de_json(request, telegram_app.bot)
+        await telegram_app.process_update(update)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return {"status": "error"}
 
 # ==================== STARTUP ====================
 
