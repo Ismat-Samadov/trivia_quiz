@@ -374,11 +374,18 @@ def setup_telegram_bot():
 
 def run_telegram_bot():
     """Run the Telegram bot"""
-    setup_telegram_bot()
-    # Create new event loop for this thread
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    telegram_app.run_polling()
+    try:
+        setup_telegram_bot()
+        # Create new event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        logger.info("Starting Telegram bot polling...")
+        # Disable signal handling since we're not in the main thread
+        telegram_app.run_polling(stop_signals=None)
+    except Exception as e:
+        logger.error(f"Error running Telegram bot: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
 
 # ==================== STARTUP ====================
 
