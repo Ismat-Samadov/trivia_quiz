@@ -43,17 +43,9 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Telegram bot...")
     
-    # Check if we should use webhook or polling
-    use_webhook = os.getenv('USE_WEBHOOK', 'false').lower() == 'true'
-    
-    if use_webhook:
-        logger.info("Using webhook mode for Telegram bot")
-        await setup_webhook()
-    else:
-        logger.info("Using polling mode for Telegram bot")
-        # Run Telegram bot in a separate thread with retry mechanism
-        bot_thread = threading.Thread(target=run_telegram_bot_with_retry, daemon=True)
-        bot_thread.start()
+    # Force webhook mode for production to avoid polling conflicts
+    logger.info("Using webhook mode for Telegram bot (production)")
+    await setup_webhook()
     
     logger.info("FastAPI + Telegram Bot started successfully!")
     
@@ -524,30 +516,71 @@ async def setup_webhook():
     try:
         setup_telegram_bot()
         
+        # Force clear any existing sessions
+        logger.info("Force clearing any existing bot sessions...")
+        await telegram_app.bot.delete_webhook(drop_pending_updates=True)
+        await asyncio.sleep(5)  # Wait for cleanup
+        
         # Get the render URL
         render_url = os.getenv('RENDER_EXTERNAL_URL', 'https://icta-dataanalyst.onrender.com')
         webhook_url = f"{render_url}/webhook"
         
-        await telegram_app.bot.set_webhook(url=webhook_url, drop_pending_updates=True)
-        logger.info(f"Webhook set to: {webhook_url}")
+        # Set webhook with force
+        await telegram_app.bot.set_webhook(
+            url=webhook_url, 
+            drop_pending_updates=True,
+            max_connections=1  # Limit connections to prevent conflicts
+        )
+        logger.info(f"Webhook successfully set to: {webhook_url}")
+        
+        # Test webhook
+        webhook_info = await telegram_app.bot.get_webhook_info()
+        logger.info(f"Webhook info: {webhook_info.url}, Pending updates: {webhook_info.pending_update_count}")
         
     except Exception as e:
         logger.error(f"Failed to setup webhook: {e}")
-        # Fallback to polling
-        logger.info("Falling back to polling mode")
-        threading.Thread(target=run_telegram_bot_with_retry, daemon=True).start()
+        logger.error("Bot will not be available - API will continue to work")
 
 # Webhook endpoint
+from fastapi import Request
+
 @app.post("/webhook")
-async def webhook_handler(request: dict):
-    """Handle incoming webhook requests"""
+async def webhook_handler(request: Request):
+    """Handle incoming webhook requests from Telegram"""
     try:
-        update = Update.de_json(request, telegram_app.bot)
-        await telegram_app.process_update(update)
+        # Get the JSON data from the request
+        request_data = await request.json()
+        logger.info(f"Received webhook update: {request_data}")
+        
+        # Convert to Telegram Update object
+        update = Update.de_json(request_data, telegram_app.bot)
+        
+        # Process the update
+        if telegram_app:
+            await telegram_app.process_update(update)
+        
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"Webhook error: {e}")
-        return {"status": "error"}
+        import traceback
+        logger.error(traceback.format_exc())
+        return {"status": "error", "message": str(e)}
+
+@app.get("/webhook")
+async def webhook_info():
+    """Get webhook information"""
+    try:
+        if telegram_app:
+            webhook_info = await telegram_app.bot.get_webhook_info()
+            return {
+                "webhook_url": webhook_info.url,
+                "pending_updates": webhook_info.pending_update_count,
+                "max_connections": webhook_info.max_connections,
+                "allowed_updates": webhook_info.allowed_updates
+            }
+        return {"error": "Bot not initialized"}
+    except Exception as e:
+        return {"error": str(e)}
 
 # ==================== STARTUP ====================
 
