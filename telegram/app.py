@@ -323,7 +323,7 @@ def generate_gemini_response(user_query, monthly_data):
     
     try:
         # Call Gemini API with enhanced configuration
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
         generation_config = genai.types.GenerationConfig(
             temperature=0.3,  # Lower temperature for more factual responses
@@ -448,6 +448,15 @@ def setup_telegram_bot():
     telegram_app.add_handler(CommandHandler("holiday", holiday))
     telegram_app.add_handler(CommandHandler("analytics", analytics))
     telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, gemini_query))
+    
+    # Add error handler for bot conflicts
+    async def error_handler(update, context):
+        """Handle bot errors gracefully"""
+        logger.error(f"Bot error: {context.error}")
+        if "Conflict" in str(context.error):
+            logger.info("Bot conflict detected - another instance might be running")
+        
+    telegram_app.add_error_handler(error_handler)
 
 def run_telegram_bot():
     """Run the Telegram bot"""
@@ -457,8 +466,20 @@ def run_telegram_bot():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         logger.info("Starting Telegram bot polling...")
+        
+        # Clear any existing webhooks to prevent conflicts
+        async def clear_webhook():
+            await telegram_app.bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Cleared existing webhooks")
+        
+        loop.run_until_complete(clear_webhook())
+        
         # Disable signal handling since we're not in the main thread
-        telegram_app.run_polling(stop_signals=None)
+        telegram_app.run_polling(
+            stop_signals=None,
+            drop_pending_updates=True,  # Clear pending updates
+            allowed_updates=["message", "callback_query"]  # Only handle specific updates
+        )
     except Exception as e:
         logger.error(f"Error running Telegram bot: {e}")
         import traceback
