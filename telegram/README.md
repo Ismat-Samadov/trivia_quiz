@@ -3,6 +3,7 @@
 A unified FastAPI + Telegram Bot application for employee analytics and data visualization. This application provides both REST API endpoints and an interactive Telegram bot powered by Google Gemini AI.
 
 🌐 **Live Application**: [https://icta-dataanalyst.onrender.com](https://icta-dataanalyst.onrender.com)
+
 🤖 **Telegram Bot**: [@icta_analyst_bot](https://t.me/icta_analyst_bot)
 
 ## 📋 Features
