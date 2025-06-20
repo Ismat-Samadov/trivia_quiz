@@ -6,6 +6,7 @@ import seaborn as sns
 import psycopg2
 from sqlalchemy import create_engine
 from fastapi import FastAPI
+from contextlib import asynccontextmanager
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from dotenv import load_dotenv
@@ -36,8 +37,29 @@ db_params = {
 # Bot Token
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 
+# Lifespan events
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("Starting Telegram bot...")
+    
+    # Run Telegram bot in a separate thread
+    bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)
+    bot_thread.start()
+    
+    logger.info("FastAPI + Telegram Bot started successfully!")
+    
+    yield
+    
+    # Shutdown
+    global telegram_app
+    if telegram_app:
+        await telegram_app.stop()
+        await telegram_app.shutdown()
+    logger.info("Application shut down successfully!")
+
 # Initialize FastAPI app
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 def get_db_connection():
     """Creates a connection to the PostgreSQL database"""
@@ -353,29 +375,12 @@ def setup_telegram_bot():
 def run_telegram_bot():
     """Run the Telegram bot"""
     setup_telegram_bot()
+    # Create new event loop for this thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     telegram_app.run_polling()
 
 # ==================== STARTUP ====================
-
-@app.on_event("startup")
-async def startup_event():
-    """Start the Telegram bot when FastAPI starts"""
-    logger.info("Starting Telegram bot...")
-    
-    # Run Telegram bot in a separate thread
-    bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)
-    bot_thread.start()
-    
-    logger.info("FastAPI + Telegram Bot started successfully!")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup when shutting down"""
-    global telegram_app
-    if telegram_app:
-        await telegram_app.stop()
-        await telegram_app.shutdown()
-    logger.info("Application shut down successfully!")
 
 if __name__ == "__main__":
     import uvicorn
