@@ -2,7 +2,7 @@
 
 A fast-paced, visually stunning trivia quiz game built with Next.js 15 and Tailwind CSS.
 
-**Live Demo:** [trivia-quiz-tau-brown.vercel.app](trivia-quiz-tau-brown.vercel.app) *(deploy to get your URL)*
+**Live Demo:** [trivia-quiz-tau-brown.vercel.app](https://trivia-quiz-tau-brown.vercel.app)
 
 ---
 
